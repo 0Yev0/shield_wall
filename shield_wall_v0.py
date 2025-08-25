@@ -28,7 +28,7 @@ ACTION_MODS: Dict[Action, Dict[str, float]] = {
     Action.CARICA:    {"vel": 1.00, "atk": 1.25, "def": 0.00},
     Action.ATTACCA:   {"vel": 0.25, "atk": 1.00, "def": 0.25},
     Action.MOVIMENTO: {"vel": 0.50, "atk": 0.25, "def": 0.25},
-    Action.DIFENDI:   {"vel": 0.00, "atk": 0.25, "def": 1.00},
+    Action.DIFENDI:   {"vel": 0.00, "atk": 0.25, "def": 1.50},
     Action.RITIRATA:  {"vel": 0.75, "atk": 0.00, "def": 0.00},
 }
 
@@ -254,7 +254,12 @@ class Game:
     # ============== Battaglie =================
 
     def _resolve_battles(self, battles: List[Tuple[Unit, Unit]]) -> None:
-        # danni simultanei, deduplicati
+        """
+        Danni simultanei, con regola 'mutuo KO':
+        - Se entrambi scendono a <= 0 nello stesso scambio, sopravvive chi aveva più HP prima
+        con HP = differenza degli HP pre-colpo; l'altro resta a 0.
+        - Se stessa HP pre-colpo: entrambi a 0.
+        """
         seen = set()
         for u, v in battles:
             if u.salute <= 0 or v.salute <= 0:
@@ -263,17 +268,57 @@ class Game:
             if key in seen:
                 continue
             seen.add(key)
+
+            # Calcolo danni simultanei
             u_atk = max(0.0, u.attacco * u.att_mod() - v.difesa * v.def_mod())
             v_atk = max(0.0, v.attacco * v.att_mod() - u.difesa * u.def_mod())
-            u_dmg = int(round(v_atk))
-            v_dmg = int(round(u_atk))
+            u_dmg = int(round(v_atk))  # danno che U riceve
+            v_dmg = int(round(u_atk))  # danno che V riceve
+
+            pre_u = u.salute
+            pre_v = v.salute
+            post_u = pre_u - u_dmg
+            post_v = pre_v - v_dmg
+
+            # Caso mutuo KO
+            if post_u <= 0 and post_v <= 0:
+                if pre_u > pre_v:
+                    # U sopravvive con la differenza
+                    u.salute = pre_u - pre_v
+                    v.salute = 0
+                    self.battle_log.append(
+                        f"{u.id} ({u.faction}) vs {v.id} ({v.faction}) -> "
+                        f"mutuo KO: sopravvive {u.id} con {u.salute} HP (diff {pre_u - pre_v})"
+                    )
+                elif pre_v > pre_u:
+                    # V sopravvive con la differenza
+                    v.salute = pre_v - pre_u
+                    u.salute = 0
+                    self.battle_log.append(
+                        f"{u.id} ({u.faction}) vs {v.id} ({v.faction}) -> "
+                        f"mutuo KO: sopravvive {v.id} con {v.salute} HP (diff {pre_v - pre_u})"
+                    )
+                else:
+                    # Parità perfetta: entrambi a 0
+                    u.salute = 0
+                    v.salute = 0
+                    self.battle_log.append(
+                        f"{u.id} ({u.faction}) vs {v.id} ({v.faction}) -> "
+                        "mutuo KO: entrambi a 0 (pari HP)"
+                    )
+                continue
+
+            # Caso normale (almeno uno resta >0)
+            new_u = max(0, post_u)
+            new_v = max(0, post_v)
             if u_dmg > 0 or v_dmg > 0:
                 self.battle_log.append(
                     f"{u.id} ({u.faction}) vs {v.id} ({v.faction}) -> "
                     f"danni: {u.id} -{u_dmg}, {v.id} -{v_dmg}"
                 )
-            u.salute = max(0, u.salute - u_dmg)
-            v.salute = max(0, v.salute - v_dmg)
+            u.salute = new_u
+            v.salute = new_v
+
 
     # ============== Applicazione move =========
 
